@@ -1,0 +1,17 @@
+{
+  "name": "portir-agent",
+  "version": "1.0.0",
+  "description": "Portir Site Agent — stateless local relay to Hikvision controllers.",
+  "type": "module",
+  "main": "agent/agent.js",
+  "scripts": {
+    "start": "node agent/agent.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "ws": "^8.21.0"
+  }
+}

@@ -1,0 +1,4 @@
+node_modules/
+agent/config.json
+agent/data/
+**/.secretkey
