@@ -29,7 +29,7 @@ import { Queues } from './queue.js';
 import { Identity } from './identity.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const AGENT_VERSION = '2.8.0'; // 2.8: capability probe on add (face/fingerprint/PIN, counts)
+const AGENT_VERSION = '2.9.0'; // 2.9: deviceInfo native-XML first (+ raw diagnostic)
 const HEARTBEAT_MS = 20000;
 
 const cfgPath = process.env.AGENT_CONFIG || path.join(__dirname, 'config.json');

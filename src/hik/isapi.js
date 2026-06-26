@@ -107,9 +107,14 @@ export class IsapiAdapter {
   async getDeviceInfo(controller) {
     const info = { online: true, syncedAt: new Date().toISOString() };
     try {
-      const r = await this.isapi(controller, '/ISAPI/System/deviceInfo?format=json', null, 'GET');
-      const di = r?.DeviceInfo || {};           // JSON firmwares
-      const x = r?.raw || '';                    // XML firmwares (the common case)
+      // Native first (most firmwares return XML on /System/deviceInfo and some reject
+      // ?format=json with an error body); fall back to the JSON variant.
+      let r = await this.isapi(controller, '/ISAPI/System/deviceInfo', null, 'GET');
+      let di = r?.DeviceInfo || {};
+      let x = r?.raw || '';
+      if (!di.model && !xmlField(x, 'model') && !di.serialNumber && !xmlField(x, 'serialNumber')) {
+        try { const r2 = await this.isapi(controller, '/ISAPI/System/deviceInfo?format=json', null, 'GET'); if (r2?.DeviceInfo) di = r2.DeviceInfo; if (r2?.raw) x = r2.raw; } catch { /* keep native */ }
+      }
       info.model = di.model ?? xmlField(x, 'model');
       info.deviceName = di.deviceName ?? xmlField(x, 'deviceName');
       info.serial = di.serialNumber ?? xmlField(x, 'serialNumber');
@@ -119,9 +124,12 @@ export class IsapiAdapter {
       info.mac = di.macAddress ?? xmlField(x, 'macAddress');
       info.deviceType = di.deviceType ?? xmlField(x, 'deviceType');
       info.deviceID = di.deviceID ?? xmlField(x, 'deviceID');
+      // Diagnostic: if we still couldn't read the basics, surface the raw response so
+      // the field mapping can be tuned for this firmware.
+      if (!info.model && !info.serial) info.deviceInfoRaw = (x || JSON.stringify(di) || '').slice(0, 600);
     } catch (e) { info.online = false; info.error = e.message; return info; }
     try {
-      const net = await this.isapi(controller, '/ISAPI/System/Network/interfaces?format=json', null, 'GET');
+      const net = await this.isapi(controller, '/ISAPI/System/Network/interfaces', null, 'GET');
       let ifaces = net?.NetworkInterfaceList?.NetworkInterface ?? net?.NetworkInterface ?? [];
       if (!Array.isArray(ifaces)) ifaces = [ifaces];
       info.network = ifaces.map(i => {
@@ -134,7 +142,7 @@ export class IsapiAdapter {
       }
     } catch { /* some firmwares restrict this */ }
     try {
-      const r = await this.isapi(controller, '/ISAPI/System/time?format=json', null, 'GET');
+      const r = await this.isapi(controller, '/ISAPI/System/time', null, 'GET');
       const time = r?.Time || {};
       info.timeZone = time.timeZone ?? xmlField(r?.raw, 'timeZone');
       info.localTime = time.localTime ?? xmlField(r?.raw, 'localTime');
