@@ -19,6 +19,7 @@ import 'dotenv/config';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { exec } from 'child_process';
 import { fileURLToPath } from 'url';
 import WebSocket from 'ws';
 import { createHik } from '../src/hik/index.js';
@@ -26,7 +27,7 @@ import { Queues } from './queue.js';
 import { Identity } from './identity.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const AGENT_VERSION = '2.1.0'; // 2.1: system telemetry + getDeviceInfo
+const AGENT_VERSION = '2.2.0'; // 2.2: self-update from the server
 const HEARTBEAT_MS = 20000;
 
 const cfgPath = process.env.AGENT_CONFIG || path.join(__dirname, 'config.json');
@@ -49,8 +50,34 @@ const currentToken = () => config.token || identity.token; // recomputed each co
 const hik = createHik(process.env);              // device adapters, reused as-is
 const queues = new Queues();                     // per-controller serialization
 
+// ---- self-update: pull the latest agent code + restart (systemd brings it back) ----
+// A FIXED routine — git pull + npm install against the agent's own checkout. It runs
+// no caller-supplied commands, so the server can only trigger an update, never run
+// arbitrary code. Requires a git checkout + a supervisor that restarts on exit
+// (e.g. systemd Restart=always); a manual `node agent/agent.js` won't auto-restart.
+const REPO_ROOT = path.join(__dirname, '..');
+const sh = (cmd) => new Promise((resolve) => exec(cmd, { cwd: REPO_ROOT, timeout: 120000, windowsHide: true },
+  (err, stdout, stderr) => resolve({ code: err ? (err.code ?? 1) : 0, out: String(stdout || '').trim(), err: String(stderr || '').trim() })));
+
+async function updateAgent() {
+  if (!fs.existsSync(path.join(REPO_ROOT, '.git'))) {
+    return { updated: false, reason: 'not-git', message: 'Agent is not a git checkout — update it manually.' };
+  }
+  const before = (await sh('git rev-parse --short HEAD')).out;
+  const pull = await sh('git pull --ff-only');
+  if (pull.code !== 0) return { updated: false, reason: 'pull-failed', before, message: (pull.err || pull.out).slice(0, 400) };
+  const after = (await sh('git rev-parse --short HEAD')).out;
+  if (after === before) return { updated: false, reason: 'up-to-date', before, after, message: `Already up to date (${after})` };
+  const npm = await sh('npm install --omit=dev --no-audit --no-fund');
+  // Reply first, then exit so the supervisor restarts us with the new code.
+  setTimeout(() => { console.log(`[agent] updated ${before} → ${after}, restarting`); process.exit(0); }, 1500);
+  return { updated: true, before, after, restarting: true, version: AGENT_VERSION, npmOk: npm.code === 0,
+           message: `Updated ${before} → ${after}; restarting${npm.code === 0 ? '' : ' (npm install reported an issue)'}` };
+}
+
 // ---- command execution: run the wire method against the inline device payload ----
 async function execute(cmd) {
+  if (cmd.method === 'updateAgent') return updateAgent(); // agent-level, no device
   const ctl = cmd.device;
   if (!ctl || !ctl.transport) throw withCode(new Error('command is missing its device payload'), 'BAD_REQUEST');
   const a = cmd.args || {};
