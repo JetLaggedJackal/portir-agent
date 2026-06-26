@@ -19,6 +19,8 @@ import 'dotenv/config';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import dgram from 'dgram';
+import crypto from 'crypto';
 import { exec } from 'child_process';
 import { fileURLToPath } from 'url';
 import WebSocket from 'ws';
@@ -27,7 +29,7 @@ import { Queues } from './queue.js';
 import { Identity } from './identity.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const AGENT_VERSION = '2.3.0'; // 2.3: server-pushed updates (applyUpdate) + XML device info
+const AGENT_VERSION = '2.4.0'; // 2.4: SADP LAN device discovery (scanNetwork)
 const HEARTBEAT_MS = 20000;
 
 const cfgPath = process.env.AGENT_CONFIG || path.join(__dirname, 'config.json');
@@ -99,9 +101,52 @@ async function updateAgent() {
 }
 
 // ---- command execution: run the wire method against the inline device payload ----
+// ---- SADP: discover Hikvision devices on the local network ----
+// Hikvision's Search Active Devices Protocol: a UDP multicast inquiry on
+// 239.255.255.250:37020; devices answer with an XML ProbeMatch carrying their
+// IP/serial/model/MAC/firmware. We send a few probes (UDP is lossy) and collect
+// replies for a few seconds. Multicast must be permitted on the LAN.
+const SADP_MCAST = '239.255.255.250';
+const SADP_PORT = 37020;
+const xmlVal = (xml, tag) => { const m = new RegExp(`<${tag}[^>]*>([^<]*)</${tag}>`, 'i').exec(xml || ''); return m ? m[1].trim() : undefined; };
+
+function scanNetwork({ timeoutMs = 5000 } = {}) {
+  return new Promise((resolve) => {
+    const found = new Map();
+    let sock;
+    const finish = (extra = {}) => { try { sock?.close(); } catch { /* closed */ } resolve({ devices: [...found.values()], count: found.size, ...extra }); };
+    try { sock = dgram.createSocket({ type: 'udp4', reuseAddr: true }); }
+    catch (e) { return resolve({ devices: [], error: e.message }); }
+    sock.on('error', (e) => finish({ error: e.message }));
+    sock.on('message', (msg) => {
+      const xml = msg.toString('utf8');
+      if (!/ProbeMatch|DeviceSN|DeviceDescription/i.test(xml)) return; // ignore our own probe / noise
+      const dev = {
+        ip: xmlVal(xml, 'IPv4Address'), serial: xmlVal(xml, 'DeviceSN'),
+        model: xmlVal(xml, 'DeviceDescription'), mac: xmlVal(xml, 'MAC'),
+        firmware: xmlVal(xml, 'SoftwareVersion') || xmlVal(xml, 'DeviceSoftwareVersion'),
+        mask: xmlVal(xml, 'IPv4SubnetMask'), gateway: xmlVal(xml, 'IPv4Gateway'),
+        httpPort: xmlVal(xml, 'HttpPort'), deviceType: xmlVal(xml, 'DeviceType'),
+        activated: xmlVal(xml, 'Activated'),
+      };
+      const key = dev.serial || dev.mac || dev.ip;
+      if (key && (dev.ip || dev.serial)) found.set(key, dev);
+    });
+    sock.bind(SADP_PORT, () => {
+      try { sock.addMembership(SADP_MCAST); } catch { /* membership can fail; replies may still arrive */ }
+      try { sock.setBroadcast(true); sock.setMulticastTTL(8); } catch { /* ok */ }
+      const probe = Buffer.from(`<?xml version="1.0" encoding="utf-8"?>\r\n<Probe><Uuid>${crypto.randomUUID()}</Uuid><Types>inquiry</Types></Probe>\r\n`, 'utf8');
+      const send = () => { try { sock.send(probe, 0, probe.length, SADP_PORT, SADP_MCAST); } catch { /* ignore */ } };
+      send(); setTimeout(send, 400); setTimeout(send, 1200);
+    });
+    setTimeout(() => finish(), timeoutMs);
+  });
+}
+
 async function execute(cmd) {
   if (cmd.method === 'applyUpdate') return applyUpdate(cmd.args); // server-pushed files
   if (cmd.method === 'updateAgent') return updateAgent();         // legacy git self-update
+  if (cmd.method === 'scanNetwork') return scanNetwork(cmd.args || {}); // SADP LAN discovery
   const ctl = cmd.device;
   if (!ctl || !ctl.transport) throw withCode(new Error('command is missing its device payload'), 'BAD_REQUEST');
   const a = cmd.args || {};
