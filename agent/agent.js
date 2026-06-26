@@ -29,7 +29,7 @@ import { Queues } from './queue.js';
 import { Identity } from './identity.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const AGENT_VERSION = '2.9.3'; // 2.9.3: broaden PIN detection + capability field diagnostic
+const AGENT_VERSION = '2.9.4'; // 2.9.4: detect PIN via isSupportPwMgrParams/GetUserAvailablePw
 const HEARTBEAT_MS = 20000;
 
 const cfgPath = process.env.AGENT_CONFIG || path.join(__dirname, 'config.json');

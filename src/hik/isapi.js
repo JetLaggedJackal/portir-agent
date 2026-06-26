@@ -207,7 +207,7 @@ export class IsapiAdapter {
         cardReaderNum: num(ac.cardReaderNum ?? xmlField(cap?.raw, 'cardReaderNum')),
         rs485Num: num(ac.RS485Num ?? xmlField(cap?.raw, 'RS485Num')),
         supportsCard: true,
-        supportsPin: /password|pincode|keypad|\bpin\b|pwd|unlockpassword|cardandpw|cardpw/.test(blob),
+        supportsPin: /password|pincode|keypad|\bpin\b|pwd|unlockpassword|cardandpw|cardpw|pwmgr|availablepw/.test(blob),
         supportsFace: /face/.test(blob),
         supportsFingerprint: /fingerprint|fingerprintnum/.test(blob),
       };
