@@ -27,6 +27,7 @@ export class MockAdapter {
       userCount: 12, cardCount: 18, tamper: 'normal', battery: 'normal',
       doorStatus: [{ doorNo: 1, door: 'close', lock: 'lock' }],
       doorParams: [{ doorNo: 1, name: 'Demo door', openDuration: 5, openTimeout: 30 }],
+      capabilities: { doorNum: 1, cardReaderNum: 2, rs485Num: 1, supportsCard: true, supportsPin: true, supportsFace: true, supportsFingerprint: false, maxUsers: 3000, maxCards: 5000 },
     };
   }
 

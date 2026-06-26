@@ -171,6 +171,25 @@ export class IsapiAdapter {
       } catch { /* not supported */ }
     }
     if (!info.doorParams.length) delete info.doorParams;
+    // What the controller supports — so Portir can adapt (face/fingerprint/PIN,
+    // door & reader counts, capacity limits). Best-effort; field names vary by model.
+    try {
+      const cap = await this.isapi(controller, '/ISAPI/AccessControl/capabilities?format=json', null, 'GET');
+      const ac = cap?.AccessControlCap || {};
+      const blob = (JSON.stringify(ac) + (cap?.raw || '')).toLowerCase();
+      const c = {
+        doorNum: num(ac.doorNum ?? xmlField(cap?.raw, 'doorNum')),
+        cardReaderNum: num(ac.cardReaderNum ?? xmlField(cap?.raw, 'cardReaderNum')),
+        rs485Num: num(ac.RS485Num ?? xmlField(cap?.raw, 'RS485Num')),
+        supportsCard: true,
+        supportsPin: /password|pincode|keypad/.test(blob),
+        supportsFace: /face/.test(blob),
+        supportsFingerprint: /fingerprint|fingerprintnum/.test(blob),
+      };
+      try { const u = await this.isapi(controller, '/ISAPI/AccessControl/UserInfo/capabilities?format=json', null, 'GET'); c.maxUsers = num(u?.UserInfo?.maxRecordNum ?? u?.UserInfoCap?.userNumber?.['@max'] ?? xmlField(u?.raw, 'maxRecordNum')); } catch { /* opt */ }
+      try { const cc = await this.isapi(controller, '/ISAPI/AccessControl/CardInfo/capabilities?format=json', null, 'GET'); c.maxCards = num(cc?.CardInfo?.maxRecordNum ?? xmlField(cc?.raw, 'maxRecordNum')); } catch { /* opt */ }
+      info.capabilities = c;
+    } catch { /* capabilities not exposed */ }
     return info;
   }
 
