@@ -52,6 +52,7 @@ export class RemoteAdapter {
   listDoors(c) { return this._rpc(c, 'listDoors', {}); }
   openDoor(c, doorNo, meta = {}) { return this._rpc(c, 'openDoor', { doorNo, actorName: meta.actorName }); }
   getPersons(c, opts = {}) { return this._rpc(c, 'getPersons', opts); }
+  getFaces(c, opts = {}) { return this._rpc(c, 'getFaces', opts); }
   getAccessEvents(c, opts = {}) { return this._rpc(c, 'getAccessEvents', opts); }
   // getStatus never throws — mirror the local adapters' behavior.
   async getStatus(c) {

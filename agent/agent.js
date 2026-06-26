@@ -29,7 +29,7 @@ import { Queues } from './queue.js';
 import { Identity } from './identity.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const AGENT_VERSION = '2.6.0'; // 2.6: capacity + door/lock/tamper status + door params
+const AGENT_VERSION = '2.7.0'; // 2.7: import face photos from the device (getFaces)
 const HEARTBEAT_MS = 20000;
 
 const cfgPath = process.env.AGENT_CONFIG || path.join(__dirname, 'config.json');
@@ -158,6 +158,7 @@ async function execute(cmd) {
     case 'pushPerson':      return hik.pushPerson(ctl, a.person, a.doorNos);
     case 'removePerson':    return hik.removePerson(ctl, a.employeeNo);
     case 'getPersons':      return hik.getPersons(ctl, a);
+    case 'getFaces':        return hik.getFaces(ctl, a);
     case 'getAccessEvents': return hik.getAccessEvents(ctl, a);
     default: throw withCode(new Error(`unknown method ${cmd.method}`), 'BAD_REQUEST');
   }

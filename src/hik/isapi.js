@@ -225,6 +225,50 @@ export class IsapiAdapter {
     return [...people.values()];
   }
 
+  // Read enrolled face photos from the device's face library (FDLib) so they can be
+  // imported alongside users. Returns [{ employeeNo, contentType, data(base64) }].
+  // Best-effort, NOT verified against live hardware — follows the documented FDLib
+  // search schema; each face JPEG is fetched from its faceURL (digest-authed).
+  async getFaces(controller, { fdid = '1', pageSize = 20, guard = 200, max = 1000 } = {}) {
+    const out = [];
+    let pos = 0;
+    for (let i = 0; i < guard && out.length < max; i++) {
+      let data;
+      try {
+        data = await this.isapi(controller, '/ISAPI/Intelligent/FDLib/FDSearch?format=json', {
+          FDSearchDescription: { searchID: crypto.randomUUID(), FDID: String(fdid), faceLibType: 'blackFD', maxResults: pageSize, searchResultPosition: pos },
+        }, 'POST');
+      } catch { break; } // no face library / not supported → users import without photos
+      const r = data?.FDSearchResult || data || {};
+      let list = r.MatchList || data?.MatchList || [];
+      if (!Array.isArray(list)) list = [list];
+      for (const m of list) {
+        const el = m.MatchElement || m;
+        const fpid = el.FPID || el.employeeNo || el.faceLibFPID;
+        const url = el.faceURL || el.FaceURL || el.url;
+        if (!fpid || !url) continue;
+        try { const img = await this.fetchImage(controller, url); if (img) out.push({ employeeNo: String(fpid), ...img }); }
+        catch { /* skip this face */ }
+      }
+      pos += list.length;
+      const total = Number(r.totalMatches ?? r.numOfMatches ?? 0);
+      if (!list.length || list.length < pageSize || (total && pos >= total)) break;
+    }
+    return out;
+  }
+
+  // Fetch an image (e.g. a faceURL) from the device and return it base64-encoded.
+  async fetchImage(controller, url) {
+    const full = /^https?:\/\//i.test(url) ? url : `${this.base(controller)}${url.startsWith('/') ? '' : '/'}${url}`;
+    const res = await digestFetch(full, { method: 'GET', username: controller.username, password: controller.password, contentType: null });
+    if (!res.ok) return null;
+    const ct = (res.headers.get('content-type') || 'image/jpeg').split(';')[0];
+    if (!/image\//i.test(ct)) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (!buf.length || buf.length > 3 * 1024 * 1024) return null;
+    return { contentType: ct, data: buf.toString('base64') };
+  }
+
   async listDoors(controller) {
     let count = controller.doorCount || 1;
     try {

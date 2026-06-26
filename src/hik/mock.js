@@ -40,6 +40,13 @@ export class MockAdapter {
     ];
   }
 
+  // Pretend one of the demo users has a face photo enrolled on the device.
+  async getFaces(controller) {
+    await delay(200);
+    const tag = (controller.serial.replace(/\D/g, '').slice(-3) || '000');
+    return [{ employeeNo: `${tag}01`, contentType: 'image/jpeg', data: Buffer.from('mock-face-jpeg-bytes').toString('base64') }];
+  }
+
   async listDoors(controller) {
     await delay(150);
     const count = controller.doorCount || 1;

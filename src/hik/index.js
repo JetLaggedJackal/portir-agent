@@ -75,6 +75,10 @@ export function createHik(env) {
       if (!a.getPersons) throw new Error(`Reading users is not supported for ${controller.transport} controllers`);
       return a.getPersons(controller, opts);
     },
+    getFaces: (controller, opts) => {
+      const a = adapterFor(controller);
+      return a.getFaces ? a.getFaces(controller, opts) : Promise.resolve([]);
+    },
     discoverCloudDevices: () => {
       if (!adapters.cloud) throw new Error('Cloud not configured (set HIK_APP_KEY / HIK_SECRET_KEY)');
       return adapters.cloud.discoverDevices();
