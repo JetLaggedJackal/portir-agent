@@ -29,7 +29,7 @@ import { Queues } from './queue.js';
 import { Identity } from './identity.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const AGENT_VERSION = '2.4.0'; // 2.4: SADP LAN device discovery (scanNetwork)
+const AGENT_VERSION = '2.5.0'; // 2.5: card number on access events
 const HEARTBEAT_MS = 20000;
 
 const cfgPath = process.env.AGENT_CONFIG || path.join(__dirname, 'config.json');

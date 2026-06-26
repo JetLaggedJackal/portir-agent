@@ -340,8 +340,9 @@ export class IsapiAdapter {
     const list = data?.AcsEvent?.InfoList || data?.InfoList || [];
     return list.map(e => ({
       ts: e.time || e.dateTime || null,
-      personName: e.name || e.employeeNoString || '',
+      personName: e.name || '',
       employeeNo: e.employeeNoString || e.employeeNo || '',
+      cardNo: e.cardNo || e.cardNoString || '',
       doorNo: e.doorNo ?? doorNo ?? null,
       status: /fail|denied|reject/i.test(JSON.stringify(e.subEventType || e.eventType || '')) ? 'denied' : 'granted',
       method: e.cardReaderKind || e.attendanceStatus || 'card',
