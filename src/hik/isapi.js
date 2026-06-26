@@ -207,14 +207,20 @@ export class IsapiAdapter {
         cardReaderNum: num(ac.cardReaderNum ?? xmlField(cap?.raw, 'cardReaderNum')),
         rs485Num: num(ac.RS485Num ?? xmlField(cap?.raw, 'RS485Num')),
         supportsCard: true,
-        supportsPin: /password|pincode|keypad/.test(blob),
+        supportsPin: /password|pincode|keypad|\bpin\b|pwd|unlockpassword|cardandpw|cardpw/.test(blob),
         supportsFace: /face/.test(blob),
         supportsFingerprint: /fingerprint|fingerprintnum/.test(blob),
       };
       try { const u = await this.isapi(controller, '/ISAPI/AccessControl/UserInfo/capabilities?format=json', null, 'GET'); c.maxUsers = num(u?.UserInfo?.maxRecordNum ?? u?.UserInfoCap?.userNumber?.['@max'] ?? xmlField(u?.raw, 'maxRecordNum')); } catch { /* opt */ }
       try { const cc = await this.isapi(controller, '/ISAPI/AccessControl/CardInfo/capabilities?format=json', null, 'GET'); c.maxCards = num(cc?.CardInfo?.maxRecordNum ?? xmlField(cc?.raw, 'maxRecordNum')); } catch { /* opt */ }
       info.capabilities = c;
-      if (c.doorNum == null && !c.supportsFace && !c.supportsFingerprint) diag.capabilities = snip(cap);
+      // If PIN/feature detection looks off, surface the capability field names that
+      // mention auth/credential keywords so the mapping can be tuned for this device.
+      if (!c.supportsPin || (c.doorNum == null && !c.supportsFace)) {
+        const raw = cap?.raw || JSON.stringify(cap?.AccessControlCap || cap || {});
+        const hits = [...new Set((raw.match(/[A-Za-z]*(?:[Ss]upport|[Pp]assword|[Pp]wd|[Pp]in|[Kk]eypad|[Aa]uthMode|[Vv]erif|[Uu]nlock)[A-Za-z]*/g) || []))].slice(0, 50);
+        diag.capabilities = hits.length ? `fields: ${hits.join(', ')}` : snip(cap);
+      }
     } catch (e) { diag.capabilities = `ERR ${e.message}`; }
     if (Object.keys(diag).length) info.diag = diag;
     return info;
