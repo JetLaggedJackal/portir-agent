@@ -27,7 +27,7 @@ import { Queues } from './queue.js';
 import { Identity } from './identity.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const AGENT_VERSION = '2.2.0'; // 2.2: self-update from the server
+const AGENT_VERSION = '2.3.0'; // 2.3: server-pushed updates (applyUpdate) + XML device info
 const HEARTBEAT_MS = 20000;
 
 const cfgPath = process.env.AGENT_CONFIG || path.join(__dirname, 'config.json');
@@ -59,6 +59,29 @@ const REPO_ROOT = path.join(__dirname, '..');
 const sh = (cmd) => new Promise((resolve) => exec(cmd, { cwd: REPO_ROOT, timeout: 120000, windowsHide: true },
   (err, stdout, stderr) => resolve({ code: err ? (err.code ?? 1) : 0, out: String(stdout || '').trim(), err: String(stderr || '').trim() })));
 
+// Preferred update path: the server pushes the agent's own files down the live
+// connection and we write + restart. Only agent/*.{js,json} and src/hik/*.js are
+// accepted (no path traversal, no touching config.json/identity). Needs a supervisor
+// that restarts on exit (systemd Restart=always) — no git or internet required.
+const ALLOWED_UPDATE = /^(agent\/[\w.-]+\.(?:js|json)|src\/hik\/[\w.-]+\.js)$/;
+async function applyUpdate({ files = [], version } = {}) {
+  if (!Array.isArray(files) || !files.length) return { updated: false, reason: 'no-files', message: 'No files in update' };
+  for (const f of files) {
+    if (!f || typeof f.path !== 'string' || typeof f.content !== 'string') return { updated: false, reason: 'bad-file', message: 'Malformed file entry' };
+    if (f.path.includes('..') || path.isAbsolute(f.path) || !ALLOWED_UPDATE.test(f.path)) return { updated: false, reason: 'bad-path', message: `Rejected path ${f.path}` };
+    if (f.path === 'agent/config.json') return { updated: false, reason: 'bad-path', message: 'Refusing to overwrite config.json' };
+  }
+  for (const f of files) {
+    const dest = path.join(REPO_ROOT, f.path);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    const tmp = `${dest}.tmp-${Date.now()}`;
+    fs.writeFileSync(tmp, f.content);
+    fs.renameSync(tmp, dest); // atomic replace
+  }
+  setTimeout(() => { console.log(`[agent] applied ${files.length} pushed file(s) → restarting`); process.exit(0); }, 1500);
+  return { updated: true, files: files.length, version: version || AGENT_VERSION, restarting: true, message: `Applied ${files.length} file(s) from server; restarting` };
+}
+
 async function updateAgent() {
   if (!fs.existsSync(path.join(REPO_ROOT, '.git'))) {
     return { updated: false, reason: 'not-git', message: 'Agent is not a git checkout — update it manually.' };
@@ -77,7 +100,8 @@ async function updateAgent() {
 
 // ---- command execution: run the wire method against the inline device payload ----
 async function execute(cmd) {
-  if (cmd.method === 'updateAgent') return updateAgent(); // agent-level, no device
+  if (cmd.method === 'applyUpdate') return applyUpdate(cmd.args); // server-pushed files
+  if (cmd.method === 'updateAgent') return updateAgent();         // legacy git self-update
   const ctl = cmd.device;
   if (!ctl || !ctl.transport) throw withCode(new Error('command is missing its device payload'), 'BAD_REQUEST');
   const a = cmd.args || {};

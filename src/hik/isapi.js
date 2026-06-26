@@ -107,12 +107,18 @@ export class IsapiAdapter {
   async getDeviceInfo(controller) {
     const info = { online: true, syncedAt: new Date().toISOString() };
     try {
-      const di = (await this.isapi(controller, '/ISAPI/System/deviceInfo?format=json', null, 'GET'))?.DeviceInfo || {};
-      Object.assign(info, {
-        model: di.model, deviceName: di.deviceName, serial: di.serialNumber,
-        firmware: di.firmwareVersion, firmwareReleased: di.firmwareReleasedDate,
-        hardware: di.hardwareVersion, mac: di.macAddress, deviceType: di.deviceType, deviceID: di.deviceID,
-      });
+      const r = await this.isapi(controller, '/ISAPI/System/deviceInfo?format=json', null, 'GET');
+      const di = r?.DeviceInfo || {};           // JSON firmwares
+      const x = r?.raw || '';                    // XML firmwares (the common case)
+      info.model = di.model ?? xmlField(x, 'model');
+      info.deviceName = di.deviceName ?? xmlField(x, 'deviceName');
+      info.serial = di.serialNumber ?? xmlField(x, 'serialNumber');
+      info.firmware = di.firmwareVersion ?? xmlField(x, 'firmwareVersion');
+      info.firmwareReleased = di.firmwareReleasedDate ?? xmlField(x, 'firmwareReleasedDate');
+      info.hardware = di.hardwareVersion ?? xmlField(x, 'hardwareVersion');
+      info.mac = di.macAddress ?? xmlField(x, 'macAddress');
+      info.deviceType = di.deviceType ?? xmlField(x, 'deviceType');
+      info.deviceID = di.deviceID ?? xmlField(x, 'deviceID');
     } catch (e) { info.online = false; info.error = e.message; return info; }
     try {
       const net = await this.isapi(controller, '/ISAPI/System/Network/interfaces?format=json', null, 'GET');
@@ -122,10 +128,16 @@ export class IsapiAdapter {
         const ip = i?.IPAddress || {};
         return { id: i?.id, address: ip.ipAddress, mask: ip.subnetMask, gateway: ip.DefaultGateway?.ipAddress, dns: ip.PrimaryDNS?.ipAddress, mac: i?.Link?.MACAddress };
       }).filter(x => x.address || x.mac);
+      if (!info.network.length && net?.raw) {       // XML fallback: best-effort single entry
+        const addr = xmlField(net.raw, 'ipAddress'), mac = xmlField(net.raw, 'MACAddress');
+        if (addr || mac) info.network = [{ address: addr, mask: xmlField(net.raw, 'subnetMask'), mac }];
+      }
     } catch { /* some firmwares restrict this */ }
     try {
-      const time = (await this.isapi(controller, '/ISAPI/System/time?format=json', null, 'GET'))?.Time || {};
-      info.timeZone = time.timeZone; info.localTime = time.localTime;
+      const r = await this.isapi(controller, '/ISAPI/System/time?format=json', null, 'GET');
+      const time = r?.Time || {};
+      info.timeZone = time.timeZone ?? xmlField(r?.raw, 'timeZone');
+      info.localTime = time.localTime ?? xmlField(r?.raw, 'localTime');
     } catch { /* optional */ }
     return info;
   }
@@ -341,6 +353,14 @@ function toIsapiTime(value, fallback) {
   if (!value) return fallback;
   const s = String(value);
   return s.length === 16 ? `${s}:00` : s;
+}
+
+// Many Hikvision firmwares ignore ?format=json on System endpoints and return XML.
+// Pull a single leaf value out of that XML (namespace-agnostic, attribute-tolerant).
+function xmlField(xml, tag) {
+  if (!xml || typeof xml !== 'string') return undefined;
+  const m = new RegExp(`<${tag}[^>]*>([^<]*)</${tag}>`, 'i').exec(xml);
+  return m ? m[1].trim() : undefined;
 }
 
 // Which door numbers a device user has rights to (from RightPlan or doorRight).
