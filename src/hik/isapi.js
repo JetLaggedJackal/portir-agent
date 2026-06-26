@@ -158,6 +158,8 @@ export class IsapiAdapter {
       const cc = await this.isapi(controller, '/ISAPI/AccessControl/CardInfo/Count?format=json', null, 'GET');
       info.cardCount = num(cc?.CardInfoCount?.cardNumber ?? xmlField(cc?.raw, 'cardNumber'));
     } catch { /* not supported */ }
+    const diag = {};
+    const snip = (r) => (r?.raw || JSON.stringify(r || {})).slice(0, 500);
     // Live health: tamper / battery / per-door open + lock state.
     try {
       const ws = await this.isapi(controller, '/ISAPI/AccessControl/AcsWorkStatus?format=json', null, 'GET');
@@ -167,7 +169,8 @@ export class IsapiAdapter {
       let ds = s.doorStatus ?? s.DoorStatus;
       if (ds && !Array.isArray(ds)) ds = [ds];
       if (Array.isArray(ds)) info.doorStatus = ds.map((d, i) => ({ doorNo: d.doorNo ?? i + 1, door: d.doorStatus ?? d.magneticStatus, lock: d.lockStatus }));
-    } catch { /* not supported */ }
+      if (!info.tamper && !info.battery && !(info.doorStatus || []).some(x => x.door || x.lock)) diag.acsWorkStatus = snip(ws);
+    } catch (e) { diag.acsWorkStatus = `ERR ${e.message}`; }
     // Per-door config: unlock duration + open-timeout.
     info.doorParams = [];
     for (let dn = 1; dn <= (controller.doorCount || 1); dn++) {
@@ -176,7 +179,8 @@ export class IsapiAdapter {
         const p = dp?.DoorParam || {};
         const x = dp?.raw;
         info.doorParams.push({ doorNo: dn, name: p.doorName ?? xmlField(x, 'doorName'), openDuration: num(p.openDuration ?? xmlField(x, 'openDuration')), openTimeout: num(p.openTimeout ?? xmlField(x, 'openTimeout')) });
-      } catch { /* not supported */ }
+        if (dn === 1 && info.doorParams[0].openDuration == null && !info.doorParams[0].name) diag.doorParam = snip(dp);
+      } catch (e) { if (dn === 1) diag.doorParam = `ERR ${e.message}`; }
     }
     if (!info.doorParams.length) delete info.doorParams;
     // What the controller supports — so Portir can adapt (face/fingerprint/PIN,
@@ -197,7 +201,9 @@ export class IsapiAdapter {
       try { const u = await this.isapi(controller, '/ISAPI/AccessControl/UserInfo/capabilities?format=json', null, 'GET'); c.maxUsers = num(u?.UserInfo?.maxRecordNum ?? u?.UserInfoCap?.userNumber?.['@max'] ?? xmlField(u?.raw, 'maxRecordNum')); } catch { /* opt */ }
       try { const cc = await this.isapi(controller, '/ISAPI/AccessControl/CardInfo/capabilities?format=json', null, 'GET'); c.maxCards = num(cc?.CardInfo?.maxRecordNum ?? xmlField(cc?.raw, 'maxRecordNum')); } catch { /* opt */ }
       info.capabilities = c;
-    } catch { /* capabilities not exposed */ }
+      if (c.doorNum == null && !c.supportsFace && !c.supportsFingerprint) diag.capabilities = snip(cap);
+    } catch (e) { diag.capabilities = `ERR ${e.message}`; }
+    if (Object.keys(diag).length) info.diag = diag;
     return info;
   }
 
