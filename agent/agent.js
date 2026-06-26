@@ -26,7 +26,7 @@ import { Queues } from './queue.js';
 import { Identity } from './identity.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const AGENT_VERSION = '2.0.0';
+const AGENT_VERSION = '2.1.0'; // 2.1: system telemetry + getDeviceInfo
 const HEARTBEAT_MS = 20000;
 
 const cfgPath = process.env.AGENT_CONFIG || path.join(__dirname, 'config.json');
@@ -56,6 +56,7 @@ async function execute(cmd) {
   const a = cmd.args || {};
   switch (cmd.method) {
     case 'getStatus':       return hik.getStatus(ctl);
+    case 'getDeviceInfo':   return hik.getDeviceInfo(ctl);
     case 'listDoors':       return hik.listDoors(ctl);
     case 'openDoor':        return hik.openDoor(ctl, a.doorNo, { actorName: a.actorName });
     case 'pushPerson':      return hik.pushPerson(ctl, a.person, a.doorNos);
@@ -75,10 +76,32 @@ function classify(e) {
 }
 const subOf = (e) => { const m = /:\s*([A-Za-z][\w]*)\s*$/.exec(e.message || ''); return m ? m[1] : undefined; };
 
+// ---- agent telemetry (reported to the server for the agent-details view) ----
+const SYSTEM_REFRESH_MS = Number(process.env.SYSTEM_REFRESH_MS) || 300000;
+function localIPs() {
+  const out = [];
+  for (const [iface, addrs] of Object.entries(os.networkInterfaces())) {
+    for (const a of addrs || []) if (a.family === 'IPv4' && !a.internal) out.push({ iface, address: a.address, mac: a.mac, cidr: a.cidr });
+  }
+  return out;
+}
+async function publicIp() {
+  if (process.env.AGENT_NO_PUBLIC_IP === '1') return null; // opt out of the outbound lookup
+  try { const r = await fetch('https://api.ipify.org', { signal: AbortSignal.timeout(5000) }); return r.ok ? (await r.text()).trim() : null; }
+  catch { return null; }
+}
+const quickSystem = () => ({
+  hostname: HOSTNAME, platform: os.platform(), release: os.release(), arch: os.arch(),
+  nodeVersion: process.version, agentVersion: AGENT_VERSION,
+  uptime: Math.round(os.uptime()), totalMem: os.totalmem(), localIPs: localIPs(), at: new Date().toISOString(),
+});
+const systemInfo = async () => ({ ...quickSystem(), publicIp: await publicIp() });
+
 // ---- connection manager ----
 let ws = null;
 let backoff = 1000;
 let heartbeat = null;
+let systemTimer = null;
 let enrolling = false;   // true while connected without a token (awaiting approval)
 
 function connect() {
@@ -96,18 +119,23 @@ function connect() {
     backoff = 1000;
     if (enrolling) {
       console.log(`[agent] connected — requesting approval. In the app, approve agent "${HOSTNAME}" with fingerprint ${FINGERPRINT}.`);
-      send({ type: 'enroll', agentId: AGENT_ID, fingerprint: FINGERPRINT, hostname: HOSTNAME, version: AGENT_VERSION });
+      send({ type: 'enroll', agentId: AGENT_ID, fingerprint: FINGERPRINT, hostname: HOSTNAME, version: AGENT_VERSION, system: quickSystem() });
     } else {
       console.log('[agent] connected');
-      send({ type: 'hello', version: AGENT_VERSION });
+      send({ type: 'hello', version: AGENT_VERSION, system: quickSystem() });
     }
     heartbeat = setInterval(() => send({ type: 'ping' }), HEARTBEAT_MS);
+    // Push full telemetry (incl. public IP, which needs an async lookup) shortly
+    // after connecting, then refresh periodically.
+    const pushSystem = async () => send({ type: 'system', system: await systemInfo() });
+    pushSystem();
+    systemTimer = setInterval(pushSystem, SYSTEM_REFRESH_MS);
   });
 
   ws.on('message', onMessage);
 
   ws.on('close', (code) => {
-    clearInterval(heartbeat);
+    clearInterval(heartbeat); clearInterval(systemTimer);
     if (code === 4003) console.log('[agent] enrollment was rejected; will keep retrying — reject it permanently in the app to stop it');
     else console.log(`[agent] disconnected (${code}); reconnecting`);
     scheduleReconnect();

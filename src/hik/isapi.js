@@ -15,13 +15,16 @@ const md5 = (s) => crypto.createHash('md5').update(s).digest('hex');
 const TIMEOUT_MS = 15000;
 
 // One request with Digest auth: try once, parse the 401 challenge, retry signed.
-async function digestFetch(url, { method = 'GET', body, username, password, contentType = 'application/json' }) {
+async function digestFetch(url, { method = 'GET', body, bodyFactory, username, password, contentType = 'application/json' }) {
   const u = new URL(url);
   const uri = u.pathname + u.search;
-  const headers = { 'Content-Type': contentType };
+  // For multipart/streamed bodies pass contentType:null so fetch sets the
+  // boundary itself; such bodies are single-use, so rebuild via bodyFactory.
+  const headers = contentType ? { 'Content-Type': contentType } : {};
+  const nextBody = () => (bodyFactory ? bodyFactory() : body);
 
   const first = await fetch(url, {
-    method, headers, body, signal: AbortSignal.timeout(TIMEOUT_MS),
+    method, headers, body: nextBody(), signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   if (first.status !== 401) return first;
 
@@ -29,7 +32,7 @@ async function digestFetch(url, { method = 'GET', body, username, password, cont
   if (!/digest/i.test(challenge)) {
     // device wants Basic (rare, or anonymous off) — fall back to Basic
     const basic = 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64');
-    return fetch(url, { method, headers: { ...headers, Authorization: basic }, body, signal: AbortSignal.timeout(TIMEOUT_MS) });
+    return fetch(url, { method, headers: { ...headers, Authorization: basic }, body: nextBody(), signal: AbortSignal.timeout(TIMEOUT_MS) });
   }
 
   const p = Object.fromEntries(
@@ -55,7 +58,7 @@ async function digestFetch(url, { method = 'GET', body, username, password, cont
   return fetch(url, {
     method,
     headers: { ...headers, Authorization: auth },
-    body,
+    body: nextBody(),
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
 }
@@ -96,6 +99,35 @@ export class IsapiAdapter {
     } catch (e) {
       return { online: false, error: e.message };
     }
+  }
+
+  // Pull a richer, read-only device profile for the controller-details view.
+  // Each section is best-effort: a failing call records an error and the rest
+  // still return.
+  async getDeviceInfo(controller) {
+    const info = { online: true, syncedAt: new Date().toISOString() };
+    try {
+      const di = (await this.isapi(controller, '/ISAPI/System/deviceInfo?format=json', null, 'GET'))?.DeviceInfo || {};
+      Object.assign(info, {
+        model: di.model, deviceName: di.deviceName, serial: di.serialNumber,
+        firmware: di.firmwareVersion, firmwareReleased: di.firmwareReleasedDate,
+        hardware: di.hardwareVersion, mac: di.macAddress, deviceType: di.deviceType, deviceID: di.deviceID,
+      });
+    } catch (e) { info.online = false; info.error = e.message; return info; }
+    try {
+      const net = await this.isapi(controller, '/ISAPI/System/Network/interfaces?format=json', null, 'GET');
+      let ifaces = net?.NetworkInterfaceList?.NetworkInterface ?? net?.NetworkInterface ?? [];
+      if (!Array.isArray(ifaces)) ifaces = [ifaces];
+      info.network = ifaces.map(i => {
+        const ip = i?.IPAddress || {};
+        return { id: i?.id, address: ip.ipAddress, mask: ip.subnetMask, gateway: ip.DefaultGateway?.ipAddress, dns: ip.PrimaryDNS?.ipAddress, mac: i?.Link?.MACAddress };
+      }).filter(x => x.address || x.mac);
+    } catch { /* some firmwares restrict this */ }
+    try {
+      const time = (await this.isapi(controller, '/ISAPI/System/time?format=json', null, 'GET'))?.Time || {};
+      info.timeZone = time.timeZone; info.localTime = time.localTime;
+    } catch { /* optional */ }
+    return info;
   }
 
   // Read users already programmed on the device (with their cards), so they can
@@ -219,13 +251,48 @@ export class IsapiAdapter {
       } else throw e;
     }
 
-    if (person.cardNo) {
-      const cardInfo = { CardInfo: { employeeNo: String(person.employeeNo), cardNo: String(person.cardNo), cardType: 'normalCard' } };
+    // Cards: push every card on the person (multi-card support). Back-compat with
+    // the legacy single cardNo when `cards` is absent.
+    const cards = (Array.isArray(person.cards) && person.cards.length) ? person.cards : (person.cardNo ? [person.cardNo] : []);
+    for (const cardNo of cards) {
+      const cardInfo = { CardInfo: { employeeNo: String(person.employeeNo), cardNo: String(cardNo), cardType: 'normalCard' } };
       try {
         await this.isapi(controller, '/ISAPI/AccessControl/CardInfo/Record?format=json', cardInfo, 'POST');
       } catch (e) {
         if (!/cardNoAlreadyExist|cardAlreadyExist/i.test(e.message)) throw e;
       }
+    }
+
+    // Face: best-effort enrollment to the device's face library. Failure does NOT
+    // block card/PIN provisioning (the person still gets in). Not verified against
+    // live hardware — payload follows the documented ISAPI FDLib schema.
+    if (person.faceImage?.data) {
+      try { await this.pushFace(controller, person); }
+      catch (e) { console.error(`[isapi] face enroll failed for ${person.employeeNo} on ${controller.host}: ${e.message}`); }
+    }
+    return { ok: true };
+  }
+
+  // Enroll a face photo via FDLib. Multipart: a JSON FaceDataRecord part + the
+  // image. Digest auth needs the body sent twice (challenge + signed), so the
+  // multipart body is rebuilt per attempt. NOT verified on hardware.
+  async pushFace(controller, person) {
+    if (!controller.host) throw new Error(`Controller ${controller.serial} has no IP/host set`);
+    const buf = Buffer.from(person.faceImage.data, 'base64');
+    const type = person.faceImage.contentType || 'image/jpeg';
+    const url = `${this.base(controller)}/ISAPI/Intelligent/FDLib/FaceDataRecord?format=json`;
+    const makeBody = () => {
+      const fd = new FormData();
+      fd.append('FaceDataRecord', JSON.stringify({ faceLibType: 'blackFD', FDID: String(controller.faceFDID || '1'), FPID: String(person.employeeNo) }));
+      fd.append('img', new Blob([buf], { type }), 'face.jpg');
+      return fd;
+    };
+    const res = await digestFetch(url, { method: 'POST', body: makeBody(), bodyFactory: makeBody, username: controller.username, password: controller.password, contentType: null });
+    const text = await res.text();
+    let data; try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    const status = data?.statusCode ?? data?.ResponseStatus?.statusCode;
+    if (!res.ok || (status !== undefined && Number(status) !== 1)) {
+      throw new Error(`face record rejected: ${data?.subStatusCode || data?.errorMsg || res.status}`);
     }
     return { ok: true };
   }

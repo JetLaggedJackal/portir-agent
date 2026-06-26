@@ -66,6 +66,10 @@ export function createHik(env) {
       const a = adapterFor(controller);
       return a.getStatus ? a.getStatus(controller) : Promise.resolve({ online: null, unknown: true });
     },
+    getDeviceInfo: (controller) => {
+      const a = adapterFor(controller);
+      return a.getDeviceInfo ? a.getDeviceInfo(controller) : Promise.resolve({ online: null, unsupported: true });
+    },
     getPersons: (controller, opts) => {
       const a = adapterFor(controller);
       if (!a.getPersons) throw new Error(`Reading users is not supported for ${controller.transport} controllers`);

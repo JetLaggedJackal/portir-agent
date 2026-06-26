@@ -58,6 +58,11 @@ export class RemoteAdapter {
     try { return await this._rpc(c, 'getStatus', {}); }
     catch (e) { return { online: false, error: e.message }; }
   }
+  // getDeviceInfo never throws — surface unreachability as { online:false }.
+  async getDeviceInfo(c) {
+    try { return await this._rpc(c, 'getDeviceInfo', {}); }
+    catch (e) { return { online: false, error: e.message }; }
+  }
 
   // ---- Sync (durable): apply now if the Agent is online, else mark pending ----
   async pushPerson(c, person, doorNos) { return this._sync(c, 'pushPerson', { person, doorNos }); }

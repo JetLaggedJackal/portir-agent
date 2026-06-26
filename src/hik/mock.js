@@ -15,6 +15,18 @@ export class MockAdapter {
     return { online: true, model: controller.deviceModel || 'DS-K (demo)', firmware: 'V1.0.0 build mock' };
   }
 
+  async getDeviceInfo(controller) {
+    await delay(250);
+    return {
+      online: true, syncedAt: new Date().toISOString(),
+      model: controller.deviceModel || 'DS-K1T343 (demo)', deviceName: controller.name || 'Demo controller',
+      serial: 'DS-MOCK-' + (controller.serial || '0000'), firmware: 'V1.0.0 build mock', firmwareReleased: '210101',
+      hardware: '0x1', mac: '00:11:22:33:44:55', deviceType: 'AccessControl',
+      network: [{ id: 1, address: '192.168.1.64', mask: '255.255.255.0', gateway: '192.168.1.1', dns: '8.8.8.8', mac: '00:11:22:33:44:55' }],
+      timeZone: 'CST-1:00:00', localTime: new Date().toISOString(),
+    };
+  }
+
   // Pretend the controller already had a couple of users programmed before Portir.
   async getPersons(controller) {
     await delay(350);
