@@ -166,10 +166,17 @@ export class IsapiAdapter {
       const s = ws?.AcsWorkStatus || {};
       info.tamper = s.tamperEvidenceStatus ?? xmlField(ws?.raw, 'tamperEvidenceStatus');
       info.battery = s.batteryStatus ?? xmlField(ws?.raw, 'batteryStatus');
+      // Intercom/door-station network + cloud state (cleanly returned by VIS devices).
+      info.netStatus = s.netStatus;
+      info.cloudStatus = s.ezvizStatus;   // Hik-Connect
+      info.sipStatus = s.sipStatus;
       let ds = s.doorStatus ?? s.DoorStatus;
-      if (ds && !Array.isArray(ds)) ds = [ds];
-      if (Array.isArray(ds)) info.doorStatus = ds.map((d, i) => ({ doorNo: d.doorNo ?? i + 1, door: d.doorStatus ?? d.magneticStatus, lock: d.lockStatus }));
-      if (!info.tamper && !info.battery && !(info.doorStatus || []).some(x => x.door || x.lock)) diag.acsWorkStatus = snip(ws);
+      if (ds != null && !Array.isArray(ds)) ds = [ds];
+      if (Array.isArray(ds)) info.doorStatus = ds.map((d, i) =>
+        (d != null && typeof d === 'object')
+          ? { doorNo: d.doorNo ?? i + 1, door: d.doorStatus ?? d.magneticStatus, lock: d.lockStatus }
+          : { doorNo: i + 1, code: Number(d) }); // door stations return a status code per door
+      if (!info.tamper && !info.battery && !info.netStatus && !(info.doorStatus || []).length) diag.acsWorkStatus = snip(ws);
     } catch (e) { diag.acsWorkStatus = `ERR ${e.message}`; }
     // Per-door config: unlock duration + open-timeout.
     info.doorParams = [];
@@ -178,15 +185,21 @@ export class IsapiAdapter {
         const dp = await this.isapi(controller, `/ISAPI/AccessControl/Door/param/${dn}?format=json`, null, 'GET');
         const p = dp?.DoorParam || {};
         const x = dp?.raw;
-        info.doorParams.push({ doorNo: dn, name: p.doorName ?? xmlField(x, 'doorName'), openDuration: num(p.openDuration ?? xmlField(x, 'openDuration')), openTimeout: num(p.openTimeout ?? xmlField(x, 'openTimeout')) });
-        if (dn === 1 && info.doorParams[0].openDuration == null && !info.doorParams[0].name) diag.doorParam = snip(dp);
+        const entry = { doorNo: dn, name: p.doorName ?? xmlField(x, 'doorName'), openDuration: num(p.openDuration ?? xmlField(x, 'openDuration')), openTimeout: num(p.openTimeout ?? xmlField(x, 'openTimeout')) };
+        // Only keep a door entry that actually carries config — door stations
+        // return an empty body here, which shouldn't render a blank section.
+        if (entry.name || entry.openDuration != null || entry.openTimeout != null) info.doorParams.push(entry);
+        else if (dn === 1 && (x || '').trim()) diag.doorParam = snip(dp);
       } catch (e) { if (dn === 1) diag.doorParam = `ERR ${e.message}`; }
     }
     if (!info.doorParams.length) delete info.doorParams;
     // What the controller supports — so Portir can adapt (face/fingerprint/PIN,
     // door & reader counts, capacity limits). Best-effort; field names vary by model.
     try {
-      const cap = await this.isapi(controller, '/ISAPI/AccessControl/capabilities?format=json', null, 'GET');
+      // Native first — some firmwares reject ?format=json here with badURLFormat.
+      let cap;
+      try { cap = await this.isapi(controller, '/ISAPI/AccessControl/capabilities', null, 'GET'); }
+      catch { cap = await this.isapi(controller, '/ISAPI/AccessControl/capabilities?format=json', null, 'GET'); }
       const ac = cap?.AccessControlCap || {};
       const blob = (JSON.stringify(ac) + (cap?.raw || '')).toLowerCase();
       const c = {

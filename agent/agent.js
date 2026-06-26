@@ -29,7 +29,7 @@ import { Queues } from './queue.js';
 import { Identity } from './identity.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const AGENT_VERSION = '2.9.1'; // 2.9.1: raw diagnostics for AcsWorkStatus/Door param/capabilities
+const AGENT_VERSION = '2.9.2'; // 2.9.2: video-door-station reads (doorStatus codes, net/cloud/sip, native capabilities)
 const HEARTBEAT_MS = 20000;
 
 const cfgPath = process.env.AGENT_CONFIG || path.join(__dirname, 'config.json');
