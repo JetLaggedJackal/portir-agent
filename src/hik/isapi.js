@@ -139,6 +139,38 @@ export class IsapiAdapter {
       info.timeZone = time.timeZone ?? xmlField(r?.raw, 'timeZone');
       info.localTime = time.localTime ?? xmlField(r?.raw, 'localTime');
     } catch { /* optional */ }
+
+    const num = (v) => (v == null || v === '') ? undefined : (Number.isNaN(Number(v)) ? undefined : Number(v));
+    // Capacity: how many users / cards are programmed on the device.
+    try {
+      const uc = await this.isapi(controller, '/ISAPI/AccessControl/UserInfo/Count?format=json', null, 'GET');
+      info.userCount = num(uc?.UserInfoCount?.userNumber ?? xmlField(uc?.raw, 'userNumber'));
+    } catch { /* not supported */ }
+    try {
+      const cc = await this.isapi(controller, '/ISAPI/AccessControl/CardInfo/Count?format=json', null, 'GET');
+      info.cardCount = num(cc?.CardInfoCount?.cardNumber ?? xmlField(cc?.raw, 'cardNumber'));
+    } catch { /* not supported */ }
+    // Live health: tamper / battery / per-door open + lock state.
+    try {
+      const ws = await this.isapi(controller, '/ISAPI/AccessControl/AcsWorkStatus?format=json', null, 'GET');
+      const s = ws?.AcsWorkStatus || {};
+      info.tamper = s.tamperEvidenceStatus ?? xmlField(ws?.raw, 'tamperEvidenceStatus');
+      info.battery = s.batteryStatus ?? xmlField(ws?.raw, 'batteryStatus');
+      let ds = s.doorStatus ?? s.DoorStatus;
+      if (ds && !Array.isArray(ds)) ds = [ds];
+      if (Array.isArray(ds)) info.doorStatus = ds.map((d, i) => ({ doorNo: d.doorNo ?? i + 1, door: d.doorStatus ?? d.magneticStatus, lock: d.lockStatus }));
+    } catch { /* not supported */ }
+    // Per-door config: unlock duration + open-timeout.
+    info.doorParams = [];
+    for (let dn = 1; dn <= (controller.doorCount || 1); dn++) {
+      try {
+        const dp = await this.isapi(controller, `/ISAPI/AccessControl/Door/param/${dn}?format=json`, null, 'GET');
+        const p = dp?.DoorParam || {};
+        const x = dp?.raw;
+        info.doorParams.push({ doorNo: dn, name: p.doorName ?? xmlField(x, 'doorName'), openDuration: num(p.openDuration ?? xmlField(x, 'openDuration')), openTimeout: num(p.openTimeout ?? xmlField(x, 'openTimeout')) });
+      } catch { /* not supported */ }
+    }
+    if (!info.doorParams.length) delete info.doorParams;
     return info;
   }
 

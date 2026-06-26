@@ -24,6 +24,9 @@ export class MockAdapter {
       hardware: '0x1', mac: '00:11:22:33:44:55', deviceType: 'AccessControl',
       network: [{ id: 1, address: '192.168.1.64', mask: '255.255.255.0', gateway: '192.168.1.1', dns: '8.8.8.8', mac: '00:11:22:33:44:55' }],
       timeZone: 'CST-1:00:00', localTime: new Date().toISOString(),
+      userCount: 12, cardCount: 18, tamper: 'normal', battery: 'normal',
+      doorStatus: [{ doorNo: 1, door: 'close', lock: 'lock' }],
+      doorParams: [{ doorNo: 1, name: 'Demo door', openDuration: 5, openTimeout: 30 }],
     };
   }
 
