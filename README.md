@@ -1,5 +1,26 @@
 # Portir Site Agent
 
+## Install on a site (one-liner)
+
+Distro- and architecture-agnostic (x86-64 / arm64 / armv7). Uses your system
+Node if it is ≥ 18, otherwise downloads the official Node build for your CPU.
+Prompts for the gateway URL and installs a systemd service.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/JetLaggedJackal/portir-agent/main/install.sh | bash
+```
+
+Unattended (skip the prompt):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/JetLaggedJackal/portir-agent/main/install.sh | GATEWAY_URL=wss://portir.io/agent bash
+```
+
+Then approve it in the app: **Admin → Site Agents → Waiting for approval**
+(match the fingerprint printed in `journalctl -u portir-agent -f`).
+Env overrides: `GATEWAY_URL`, `INSTALL_DIR`, `BRANCH`, `NODE_VERSION`, `NO_SERVICE=1`. Re-run any time to update.
+
+
 A **stateless local relay**. Runs at a customer site, keeps one outbound WebSocket
 to the Gateway, and executes commands against the local devices using Portir's
 existing `src/hik` device layer (unchanged). It holds **no** controller or people
