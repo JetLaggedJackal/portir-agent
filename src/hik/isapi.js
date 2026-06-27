@@ -222,6 +222,12 @@ export class IsapiAdapter {
         diag.capabilities = hits.length ? `fields: ${hits.join(', ')}` : snip(cap);
       }
     } catch (e) { diag.capabilities = `ERR ${e.message}`; }
+    // Face data libraries (so we can see if/where faces live for importing photos).
+    try {
+      const libs = await this.getFaceLibs(controller);
+      if (libs.length) { info.faceLibs = libs; info.faceCount = libs.reduce((n, l) => n + (l.count || 0), 0); }
+      else diag.faceLibs = 'no FDLib list returned';
+    } catch (e) { diag.faceLibs = `ERR ${e.message}`; }
     if (Object.keys(diag).length) info.diag = diag;
     return info;
   }
@@ -277,35 +283,63 @@ export class IsapiAdapter {
     return [...people.values()];
   }
 
-  // Read enrolled face photos from the device's face library (FDLib) so they can be
-  // imported alongside users. Returns [{ employeeNo, contentType, data(base64) }].
-  // Best-effort, NOT verified against live hardware — follows the documented FDLib
-  // search schema; each face JPEG is fetched from its faceURL (digest-authed).
-  async getFaces(controller, { fdid = '1', pageSize = 20, guard = 200, max = 1000 } = {}) {
-    const out = [];
-    let pos = 0;
-    for (let i = 0; i < guard && out.length < max; i++) {
-      let data;
-      try {
-        data = await this.isapi(controller, '/ISAPI/Intelligent/FDLib/FDSearch?format=json', {
-          FDSearchDescription: { searchID: crypto.randomUUID(), FDID: String(fdid), faceLibType: 'blackFD', maxResults: pageSize, searchResultPosition: pos },
-        }, 'POST');
-      } catch { break; } // no face library / not supported → users import without photos
-      const r = data?.FDSearchResult || data || {};
-      let list = r.MatchList || data?.MatchList || [];
-      if (!Array.isArray(list)) list = [list];
-      for (const m of list) {
-        const el = m.MatchElement || m;
-        const fpid = el.FPID || el.employeeNo || el.faceLibFPID;
-        const url = el.faceURL || el.FaceURL || el.url;
-        if (!fpid || !url) continue;
-        try { const img = await this.fetchImage(controller, url); if (img) out.push({ employeeNo: String(fpid), ...img }); }
-        catch { /* skip this face */ }
-      }
-      pos += list.length;
-      const total = Number(r.totalMatches ?? r.numOfMatches ?? 0);
-      if (!list.length || list.length < pageSize || (total && pos >= total)) break;
+  // List the device's face data libraries → [{ FDID, faceLibType, name, count }].
+  // The FDID is NOT always '1' (door stations differ), so we discover it.
+  async getFaceLibs(controller) {
+    const parse = (d) => {
+      const arr = d?.FDLibInfoList || d?.FDLibBaseCfgList || d?.FaceLibList || d?.FDLib || [];
+      const list = Array.isArray(arr) ? arr : [arr].filter(v => v && typeof v === 'object');
+      return list.map(x => ({
+        FDID: String(x.FDID ?? x.id ?? x.faceLibFDID ?? ''),
+        faceLibType: x.faceLibType || x.type || 'blackFD',
+        name: x.name || '',
+        count: Number(x.recordDataNumber ?? x.faceNum ?? x.dataNum ?? x.recordNumber ?? 0) || 0,
+      })).filter(x => x.FDID);
+    };
+    for (const p of ['/ISAPI/Intelligent/FDLib?format=json', '/ISAPI/Intelligent/FDLib/Count?format=json']) {
+      try { const libs = parse(await this.isapi(controller, p, null, 'GET')); if (libs.length) return libs; } catch { /* try next */ }
     }
+    return [];
+  }
+
+  // Read enrolled face photos so they can be imported alongside users.
+  // Returns [{ employeeNo, contentType, data(base64) }]. Discovers the real face
+  // library/libraries first (FDID varies by model); logs a diagnostic line.
+  async getFaces(controller, opts = {}) {
+    const { pageSize = 20, guard = 200, max = 1000 } = opts;
+    let libs = [];
+    try { libs = await this.getFaceLibs(controller); } catch { /* ignore */ }
+    if (!libs.length) libs = [{ FDID: String(opts.fdid || '1'), faceLibType: opts.faceLibType || 'blackFD' }];
+    const out = [];
+    let searched = false; const fpidSample = [];
+    for (const lib of libs) {
+      let pos = 0;
+      for (let i = 0; i < guard && out.length < max; i++) {
+        let data;
+        try {
+          searched = true;
+          data = await this.isapi(controller, '/ISAPI/Intelligent/FDLib/FDSearch?format=json', {
+            FDSearchDescription: { searchID: (crypto.randomUUID?.() || String(Date.now())), FDID: String(lib.FDID), faceLibType: lib.faceLibType || 'blackFD', maxResults: pageSize, searchResultPosition: pos },
+          }, 'POST');
+        } catch (e) { console.error(`[faces] FDSearch FDID=${lib.FDID} failed: ${e.message}`); break; }
+        const r = data?.FDSearchResult || data || {};
+        let list = r.MatchList || data?.MatchList || [];
+        if (!Array.isArray(list)) list = [list];
+        for (const m of list) {
+          const el = m.MatchElement || m.FaceModifyResult || m;
+          const fpid = el.FPID || el.employeeNo || el.faceLibFPID || m.FPID;
+          const url = el.faceURL || el.FaceURL || el.url;
+          if (fpid && fpidSample.length < 8) fpidSample.push(String(fpid));
+          if (!fpid || !url) continue;
+          try { const img = await this.fetchImage(controller, url); if (img) out.push({ employeeNo: String(fpid), ...img }); }
+          catch { /* skip this face */ }
+        }
+        pos += list.length;
+        const total = Number(r.totalMatches ?? r.numOfMatches ?? 0);
+        if (!list.length || list.length < pageSize || (total && pos >= total)) break;
+      }
+    }
+    console.log(`[faces] libs=${JSON.stringify(libs.map(l => ({ FDID: l.FDID, type: l.faceLibType, count: l.count })))} searched=${searched} fpidSample=${JSON.stringify(fpidSample)} photosFetched=${out.length}`);
     return out;
   }
 

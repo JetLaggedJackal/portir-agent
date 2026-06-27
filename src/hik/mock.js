@@ -28,8 +28,10 @@ export class MockAdapter {
       doorStatus: [{ doorNo: 1, door: 'close', lock: 'lock' }],
       doorParams: [{ doorNo: 1, name: 'Demo door', openDuration: 5, openTimeout: 30 }],
       capabilities: { doorNum: 1, cardReaderNum: 2, rs485Num: 1, supportsCard: true, supportsPin: true, supportsFace: true, supportsFingerprint: false, maxUsers: 3000, maxCards: 5000 },
+      faceLibs: [{ FDID: '1', faceLibType: 'blackFD', name: 'Face library', count: 1 }], faceCount: 1,
     };
   }
+  async getFaceLibs() { await delay(80); return [{ FDID: '1', faceLibType: 'blackFD', name: 'Face library', count: 1 }]; }
 
   // Pretend the controller already had a couple of users programmed before Portir.
   async getPersons(controller) {
